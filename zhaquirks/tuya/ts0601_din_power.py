@@ -26,7 +26,6 @@ from zhaquirks.const import (
     PROFILE_ID,
 )
 from zhaquirks.tuya import (
-    #TuyaManufCluster,
     TuyaManufClusterAttributes,
     TuyaSwitch,
     TuyaManufacturerClusterOnOff,
@@ -117,28 +116,6 @@ class TuyaElectricalMeasurement(LocalDataCluster,Metering):
         """Summation Energy reported."""
         self._update_attribute(self.CURRENT_ID, value)
 
-#class TuyaManufacturerClusterDINOnOff(TuyaManufCluster):
-#    """Manufacturer Specific Cluster of On/Off device."""
-
-#    def handle_cluster_request(
-#        self,
-#        hdr: foundation.ZCLHeader,
-#        args: Tuple[TuyaManufCluster.Command],
-#        *,
-#        dst_addressing: Optional[
-#            Union[t.Addressing.Group, t.Addressing.IEEE, t.Addressing.NWK]
-#        ] = None,
-#    ) -> None:
-#        """Handle cluster request."""
-#
-#        tuya_payload = args[0]
-#        if hdr.command_id in (0x0002, 0x0001) and tuya_payload.command_id == 0x0101:
-#            self.endpoint.device.switch_bus.listener_event(
-#                SWITCH_EVENT,
-#                tuya_payload.command_id - TUYA_CMD_BASE,
-#                tuya_payload.data[1],
-#            )
-
 class TuyaPowerMeter(TuyaSwitch):
     """Tuya power meter device."""
 
@@ -192,7 +169,6 @@ class TuyaPowerMeter(TuyaSwitch):
                     TuyaManufClusterDinPower,
                     TuyaPowerMeasurement,
                     TuyaElectricalMeasurement,
-                    #TuyaManufacturerClusterOnOff,
                     TuyaOnOff,
                  ],
                 OUTPUT_CLUSTERS: [Time.cluster_id, Ota.cluster_id],
