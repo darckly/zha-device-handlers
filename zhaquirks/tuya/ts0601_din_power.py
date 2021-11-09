@@ -59,7 +59,7 @@ class TuyaManufClusterDinPower(TuyaManufClusterAttributes):
             )
         elif attrid == TUYA_CURRENT_ATTR:
             self.endpoint.device.electrical_bus.listener_event(
-                "current_reported", value / 1000
+                "current_reported", value
             )
         elif attrid == TUYA_POWER_ATTR:
             self.endpoint.device.electrical_bus.listener_event(
@@ -67,7 +67,7 @@ class TuyaManufClusterDinPower(TuyaManufClusterAttributes):
             )
         elif attrid == TUYA_VOLTAGE_ATTR:
             self.endpoint.device.electrical_bus.listener_event(
-                "voltage_reported", value / 10
+                "voltage_reported", value
             )
         elif attrid == TUYA_DIN_SWITCH_ATTR:
             self.endpoint.device.switch_bus.listener_event(
@@ -80,6 +80,11 @@ class TuyaPowerMeasurement(LocalDataCluster,ElectricalMeasurement):
     POWER_ID = 0x050B
     VOLTAGE_ID = 0x0505
     CURRENT_ID = 0x0508
+
+    AC_CURRENT_MULTIPLIER = 0x0602
+    AC_CURRENT_DIVISOR = 0x0603
+
+    _CONSTANT_ATTRIBUTES = {AC_CURRENT_MULTIPLIER: 1, AC_CURRENT_DIVISOR: 1000}
 
     def __init__(self, *args, **kwargs):
         """Init."""
