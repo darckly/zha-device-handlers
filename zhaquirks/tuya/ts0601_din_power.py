@@ -67,7 +67,7 @@ class TuyaManufClusterDinPower(TuyaManufClusterAttributes):
             )
         elif attrid == TUYA_VOLTAGE_ATTR:
             self.endpoint.device.electrical_bus.listener_event(
-                "voltage_reported", value
+                "voltage_reported", value / 10
             )
         elif attrid == TUYA_DIN_SWITCH_ATTR:
             self.endpoint.device.switch_bus.listener_event(
