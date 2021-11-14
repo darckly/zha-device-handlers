@@ -9,14 +9,6 @@ from zhaquirks import Bus, LocalDataCluster
 from zigpy.zcl.clusters.homeautomation import ElectricalMeasurement
 from zigpy.zcl.clusters.smartenergy import Metering
 
-from homeassistant.const import (
-    ELECTRIC_POTENTIAL_VOLT,
-    ELECTRIC_CURRENT_AMPERE,
-)
-
-
-from zhaquirks import PowerConfigurationCluster
-
 from zhaquirks.const import (
     DEVICE_TYPE,
     ENDPOINTS,
