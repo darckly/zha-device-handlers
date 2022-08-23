@@ -14,7 +14,14 @@ from zigpy.zcl.clusters.hvac import Thermostat, UserInterface
 from zigpy.zcl.clusters.smartenergy import Metering
 
 from zhaquirks import Bus, EventableCluster, LocalDataCluster
-from zhaquirks.const import DOUBLE_PRESS, LONG_PRESS, SHORT_PRESS, ZHA_SEND_EVENT
+from zhaquirks.const import (
+    DOUBLE_PRESS,
+    LEFT,
+    LONG_PRESS,
+    RIGHT,
+    SHORT_PRESS,
+    ZHA_SEND_EVENT,
+)
 
 # ---------------------------------------------------------
 # Tuya Custom Cluster ID
@@ -40,6 +47,9 @@ TUYA_LEVEL_COMMAND = 514
 COVER_EVENT = "cover_event"
 LEVEL_EVENT = "level_event"
 TUYA_MCU_COMMAND = "tuya_mcu_command"
+
+# Rotating for remotes
+STOP = "stop"  # To constans
 
 # ---------------------------------------------------------
 # Value for dp_type
@@ -90,37 +100,6 @@ COVER_EVENT = "cover_event"
 ATTR_COVER_POSITION = 0x0008
 ATTR_COVER_DIRECTION = 0x8001
 ATTR_COVER_INVERTED = 0x8002
-# For most tuya devices 0 = Up/Open, 1 = Stop, 2 = Down/Close
-TUYA_COVER_COMMAND = {
-    "_TZE200_zah67ekd": {0x0000: 0x0000, 0x0001: 0x0002, 0x0002: 0x0001},
-    "_TZE200_fzo2pocs": {0x0000: 0x0000, 0x0001: 0x0002, 0x0002: 0x0001},
-    "_TZE200_xuzcvlku": {0x0000: 0x0000, 0x0001: 0x0002, 0x0002: 0x0001},
-    "_TZE200_rddyvrci": {0x0000: 0x0002, 0x0001: 0x0001, 0x0002: 0x0000},
-    "_TZE200_3i3exuay": {0x0000: 0x0000, 0x0001: 0x0002, 0x0002: 0x0001},
-    "_TZE200_nueqqe6k": {0x0000: 0x0000, 0x0001: 0x0002, 0x0002: 0x0001},
-    "_TZE200_gubdgai2": {0x0000: 0x0000, 0x0001: 0x0002, 0x0002: 0x0001},
-    "_TZE200_zpzndjez": {0x0000: 0x0000, 0x0001: 0x0002, 0x0002: 0x0001},
-    "_TZE200_cowvfni3": {0x0000: 0x0002, 0x0001: 0x0000, 0x0002: 0x0001},
-    "_TYST11_wmcdj3aq": {0x0000: 0x0000, 0x0001: 0x0002, 0x0002: 0x0001},
-    "_TZE200_yenbr4om": {0x0000: 0x0000, 0x0001: 0x0002, 0x0002: 0x0001},
-    "_TZE200_5sbebbzs": {0x0000: 0x0000, 0x0001: 0x0002, 0x0002: 0x0001},
-    "_TZE200_xaabybja": {0x0000: 0x0000, 0x0001: 0x0002, 0x0002: 0x0001},
-    "_TZE200_hsgrhjpf": {0x0000: 0x0000, 0x0001: 0x0002, 0x0002: 0x0001},
-    "_TZE200_iossyxra": {0x0000: 0x0000, 0x0001: 0x0002, 0x0002: 0x0001},
-}
-# Taken from zigbee-herdsman-converters
-# Contains all covers which need their position inverted by default
-# Default is 100 = open, 0 = closed; Devices listed here will use 0 = open, 100 = closed instead
-# Use manufacturerName to identify device!
-# Don't invert _TZE200_cowvfni3: https://github.com/Koenkk/zigbee2mqtt/issues/6043
-TUYA_COVER_INVERTED_BY_DEFAULT = [
-    "_TZE200_wmcdj3aq",
-    "_TZE200_nogaemzt",
-    "_TZE200_xuzcvlku",
-    "_TZE200_xaabybja",
-    "_TZE200_yenbr4om",
-    "_TZE200_zpzndjez",
-]
 
 # ---------------------------------------------------------
 # TUYA Switch Custom Values
@@ -173,8 +152,6 @@ class BigEndianInt16(int):
 
 class TuyaTimePayload(t.LVList, item_type=t.uint8_t, length_type=BigEndianInt16):
     """Tuya set time payload definition."""
-
-    pass
 
 
 class TuyaDPType(t.enum8):
@@ -257,6 +234,28 @@ class TuyaCommand(t.Struct):
     data: TuyaData
 
 
+class NoManufacturerCluster(CustomCluster):
+    """Forces the NO manufacturer id in command."""
+
+    async def command(
+        self,
+        command_id: Union[foundation.GeneralCommand, int, t.uint8_t],
+        *args,
+        manufacturer: Optional[Union[int, t.uint16_t]] = None,
+        expect_reply: bool = True,
+        tsn: Optional[Union[int, t.uint8_t]] = None,
+    ):
+        """Override the default Cluster command."""
+        self.debug("Setting the NO manufacturer id in command: %s", command_id)
+        return await super().command(
+            command_id,
+            *args,
+            manufacturer=foundation.ZCLHeader.NO_MANUFACTURER_ID,
+            expect_reply=expect_reply,
+            tsn=tsn,
+        )
+
+
 class TuyaManufCluster(CustomCluster):
     """Tuya manufacturer specific cluster."""
 
@@ -296,18 +295,43 @@ class TuyaManufCluster(CustomCluster):
 
             NOTE: You need to wait for time request before setting it. You can't set time without request."""
 
-    manufacturer_server_commands = {
-        0x0000: ("set_data", (Command,), False),
-        0x0010: ("mcu_version_req", (t.uint16_t,), False),
-        0x0024: ("set_time", (TuyaTimePayload,), False),
+    server_commands = {
+        0x0000: foundation.ZCLCommandDef(
+            "set_data", {"param": Command}, False, is_manufacturer_specific=True
+        ),
+        0x0010: foundation.ZCLCommandDef(
+            "mcu_version_req",
+            {"param": t.uint16_t},
+            False,
+            is_manufacturer_specific=True,
+        ),
+        0x0024: foundation.ZCLCommandDef(
+            "set_time", {"param": TuyaTimePayload}, False, is_manufacturer_specific=True
+        ),
     }
 
-    manufacturer_client_commands = {
-        0x0001: ("get_data", (Command,), True),
-        0x0002: ("set_data_response", (Command,), True),
-        0x0006: ("active_status_report", (Command,), True),
-        0x0011: ("mcu_version_rsp", (MCUVersionRsp,), True),
-        0x0024: ("set_time_request", (t.data16,), True),
+    client_commands = {
+        0x0001: foundation.ZCLCommandDef(
+            "get_data", {"param": Command}, True, is_manufacturer_specific=True
+        ),
+        0x0002: foundation.ZCLCommandDef(
+            "set_data_response", {"param": Command}, True, is_manufacturer_specific=True
+        ),
+        0x0006: foundation.ZCLCommandDef(
+            "active_status_report",
+            {"param": Command},
+            True,
+            is_manufacturer_specific=True,
+        ),
+        0x0011: foundation.ZCLCommandDef(
+            "mcu_version_rsp",
+            {"param": MCUVersionRsp},
+            True,
+            is_manufacturer_specific=True,
+        ),
+        0x0024: foundation.ZCLCommandDef(
+            "set_time_request", {"param": t.data16}, True, is_manufacturer_specific=True
+        ),
     }
 
     def __init__(self, *args, **kwargs):
@@ -412,7 +436,7 @@ class TuyaManufClusterAttributes(TuyaManufCluster):
         if tuya_cmd not in self.attributes:
             return
 
-        ztype = self.attributes[tuya_cmd][1]
+        ztype = self.attributes[tuya_cmd].type
         zvalue = tuya_data.to_value(ztype)
         self._update_attribute(tuya_cmd, zvalue)
 
@@ -471,7 +495,7 @@ class TuyaOnOff(CustomCluster, OnOff):
 
     async def command(
         self,
-        command_id: Union[foundation.Command, int, t.uint8_t],
+        command_id: Union[foundation.GeneralCommand, int, t.uint8_t],
         *args,
         manufacturer: Optional[Union[int, t.uint16_t]] = None,
         expect_reply: bool = True,
@@ -560,7 +584,7 @@ class TuyaThermostatCluster(LocalDataCluster, Thermostat):
 
     def temperature_change(self, attr, value):
         """Local or target temperature change from device."""
-        self._update_attribute(self.attridx[attr], value)
+        self._update_attribute(self.attributes_by_name[attr].id, value)
 
     def state_change(self, value):
         """State update from device."""
@@ -570,8 +594,8 @@ class TuyaThermostatCluster(LocalDataCluster, Thermostat):
         else:
             mode = self.RunningMode.Heat
             state = self.RunningState.Heat_State_On
-        self._update_attribute(self.attridx["running_mode"], mode)
-        self._update_attribute(self.attridx["running_state"], state)
+        self._update_attribute(self.attributes_by_name["running_mode"].id, mode)
+        self._update_attribute(self.attributes_by_name["running_state"].id, state)
 
     # pylint: disable=R0201
     def map_attribute(self, attribute, value):
@@ -588,7 +612,7 @@ class TuyaThermostatCluster(LocalDataCluster, Thermostat):
 
         manufacturer_attrs = {}
         for record in records:
-            attr_name = self.attributes[record.attrid][0]
+            attr_name = self.attributes[record.attrid].name
             new_attrs = self.map_attribute(attr_name, record.value.value)
 
             _LOGGER.debug(
@@ -624,7 +648,7 @@ class TuyaThermostatCluster(LocalDataCluster, Thermostat):
     # pylint: disable=W0236
     async def command(
         self,
-        command_id: Union[foundation.Command, int, t.uint8_t],
+        command_id: Union[foundation.GeneralCommand, int, t.uint8_t],
         *args,
         manufacturer: Optional[Union[int, t.uint16_t]] = None,
         expect_reply: bool = True,
@@ -633,13 +657,19 @@ class TuyaThermostatCluster(LocalDataCluster, Thermostat):
         """Implement thermostat commands."""
 
         if command_id != 0x0000:
-            return [command_id, foundation.Status.UNSUP_CLUSTER_COMMAND]
+            return foundation.GENERAL_COMMANDS[
+                foundation.GeneralCommand.Default_Response
+            ].schema(
+                command_id=command_id, status=foundation.Status.UNSUP_CLUSTER_COMMAND
+            )
 
         mode, offset = args
         if mode not in (self.SetpointMode.Heat, self.SetpointMode.Both):
-            return [command_id, foundation.Status.INVALID_VALUE]
+            return foundation.GENERAL_COMMANDS[
+                foundation.GeneralCommand.Default_Response
+            ].schema(command_id=command_id, status=foundation.Status.INVALID_VALUE)
 
-        attrid = self.attridx["occupied_heating_setpoint"]
+        attrid = self.attributes_by_name["occupied_heating_setpoint"].id
 
         success, _ = await self.read_attributes((attrid,), manufacturer=manufacturer)
         try:
@@ -652,7 +682,9 @@ class TuyaThermostatCluster(LocalDataCluster, Thermostat):
             {"occupied_heating_setpoint": current + offset * 10},
             manufacturer=manufacturer,
         )
-        return [command_id, res[0].status]
+        return foundation.GENERAL_COMMANDS[
+            foundation.GeneralCommand.Default_Response
+        ].schema(command_id=command_id, status=res[0].status)
 
 
 class TuyaUserInterfaceCluster(LocalDataCluster, UserInterface):
@@ -670,7 +702,7 @@ class TuyaUserInterfaceCluster(LocalDataCluster, UserInterface):
         else:
             lockout = self.KeypadLockout.Level_1_lockout
 
-        self._update_attribute(self.attridx["keypad_lockout"], lockout)
+        self._update_attribute(self.attributes_by_name["keypad_lockout"].id, lockout)
 
     def map_attribute(self, attribute, value):
         """Map standardized attribute value to dict of manufacturer values."""
@@ -683,11 +715,11 @@ class TuyaUserInterfaceCluster(LocalDataCluster, UserInterface):
 
         manufacturer_attrs = {}
         for record in records:
-            if record.attrid == self.attridx["keypad_lockout"]:
+            if record.attrid == self.attributes_by_name["keypad_lockout"].id:
                 lock = 0 if record.value.value == self.KeypadLockout.No_lockout else 1
                 new_attrs = {self._CHILD_LOCK_ATTR: lock}
             else:
-                attr_name = self.attributes[record.attrid][0]
+                attr_name = self.attributes[record.attrid].name
                 new_attrs = self.map_attribute(attr_name, record.value.value)
 
                 _LOGGER.debug(
@@ -721,7 +753,25 @@ class TuyaUserInterfaceCluster(LocalDataCluster, UserInterface):
         return [[foundation.WriteAttributesStatusRecord(foundation.Status.SUCCESS)]]
 
 
-class TuyaPowerConfigurationCluster(LocalDataCluster, PowerConfiguration):
+class TuyaLocalCluster(LocalDataCluster):
+    """Tuya virtual clusters.
+
+    Prevents attribute reads and writes. Attribute writes could be converted
+    to DataPoint updates.
+    """
+
+    def update_attribute(self, attr_name: str, value: Any) -> None:
+        """Update attribute by attribute name."""
+
+        try:
+            attr = self.attributes_by_name[attr_name]
+        except KeyError:
+            self.debug("no such attribute: %s", attr_name)
+            return
+        return self._update_attribute(attr.id, value)
+
+
+class TuyaPowerConfigurationCluster(PowerConfiguration, TuyaLocalCluster):
     """PowerConfiguration cluster for battery-operated thermostats."""
 
     def __init__(self, *args, **kwargs):
@@ -731,11 +781,25 @@ class TuyaPowerConfigurationCluster(LocalDataCluster, PowerConfiguration):
 
     def battery_change(self, value):
         """Change of reported battery percentage remaining."""
-        self._update_attribute(self.attridx["battery_percentage_remaining"], value * 2)
+        self.update_attribute("battery_percentage_remaining", value * 2)
+
+
+class TuyaPowerConfigurationCluster2AAA(PowerConfiguration, TuyaLocalCluster):
+    """PowerConfiguration cluster for devices with 2 AAA."""
+
+    BATTERY_SIZES = 0x0031
+    BATTERY_QUANTITY = 0x0033
+    BATTERY_RATED_VOLTAGE = 0x0034
+
+    _CONSTANT_ATTRIBUTES = {
+        BATTERY_SIZES: 4,
+        BATTERY_QUANTITY: 2,
+        BATTERY_RATED_VOLTAGE: 15,
+    }
 
 
 class TuyaPowerConfigurationCluster2AA(TuyaPowerConfigurationCluster):
-    """PowerConfiguration cluster for battery-operated TRVs with 2 AA."""
+    """PowerConfiguration cluster for devices with 2 AA."""
 
     BATTERY_SIZES = 0x0031
     BATTERY_RATED_VOLTAGE = 0x0034
@@ -749,7 +813,7 @@ class TuyaPowerConfigurationCluster2AA(TuyaPowerConfigurationCluster):
 
 
 class TuyaPowerConfigurationCluster3AA(TuyaPowerConfigurationCluster):
-    """PowerConfiguration cluster for battery-operated TRVs with 3 AA."""
+    """PowerConfiguration cluster for devices with 3 AA."""
 
     BATTERY_SIZES = 0x0031
     BATTERY_RATED_VOLTAGE = 0x0034
@@ -771,57 +835,6 @@ class TuyaThermostat(CustomDevice):
         self.ui_bus = Bus()
         self.battery_bus = Bus()
         super().__init__(*args, **kwargs)
-
-
-class TuyaSmartRemoteOnOffCluster(OnOff, EventableCluster):
-    """TuyaSmartRemoteOnOffCluster: fire events corresponding to press type."""
-
-    press_type = {
-        0x00: SHORT_PRESS,
-        0x01: DOUBLE_PRESS,
-        0x02: LONG_PRESS,
-    }
-    name = "TS004X_cluster"
-    ep_attribute = "TS004X_cluster"
-
-    def __init__(self, *args, **kwargs):
-        """Init."""
-        self.last_tsn = -1
-        super().__init__(*args, **kwargs)
-
-    manufacturer_server_commands = {
-        0xFD: ("press_type", (t.uint8_t,), False),
-    }
-
-    def handle_cluster_request(
-        self,
-        hdr: foundation.ZCLHeader,
-        args: List[Any],
-        *,
-        dst_addressing: Optional[
-            Union[t.Addressing.Group, t.Addressing.IEEE, t.Addressing.NWK]
-        ] = None,
-    ):
-        """Handle press_types command."""
-        # normally if default response sent, TS004x wouldn't send such repeated zclframe (with same sequence number),
-        # but for stability reasons (e. g. the case the response doesn't arrive the device), we can simply ignore it
-        if hdr.tsn == self.last_tsn:
-            _LOGGER.debug("TS004X: ignoring duplicate frame")
-            return
-        # save last sequence number
-        self.last_tsn = hdr.tsn
-
-        # send default response (as soon as possible), so avoid repeated zclframe from device
-        if not hdr.frame_control.disable_default_response:
-            self.debug("TS004X: send default response")
-            self.send_default_rsp(hdr, status=foundation.Status.SUCCESS)
-
-        # handle command
-        if hdr.command_id == 0xFD:
-            press_type = args[0]
-            self.listener_event(
-                ZHA_SEND_EVENT, self.press_type.get(press_type, "unknown"), []
-            )
 
 
 # Tuya Zigbee OnOff Cluster Attribute Implementation
@@ -852,9 +865,88 @@ class TuyaZBOnOffAttributeCluster(CustomCluster, OnOff):
     """Tuya Zigbee On Off cluster with extra attributes."""
 
     attributes = OnOff.attributes.copy()
+    attributes.update({0x8000: ("child_lock", t.Bool)})
     attributes.update({0x8001: ("backlight_mode", SwitchBackLight)})
     attributes.update({0x8002: ("power_on_state", PowerOnState)})
     attributes.update({0x8004: ("switch_mode", SwitchMode)})
+
+
+class TuyaSmartRemoteOnOffCluster(OnOff, EventableCluster):
+    """TuyaSmartRemoteOnOffCluster: fire events corresponding to press type."""
+
+    rotate_type = {
+        0x00: RIGHT,
+        0x01: LEFT,
+        0x02: STOP,
+    }
+    press_type = {
+        0x00: SHORT_PRESS,
+        0x01: DOUBLE_PRESS,
+        0x02: LONG_PRESS,
+    }
+    name = "TS004X_cluster"
+    ep_attribute = "TS004X_cluster"
+    attributes = OnOff.attributes.copy()
+    attributes.update({0x8001: ("backlight_mode", SwitchBackLight)})
+    attributes.update({0x8002: ("power_on_state", PowerOnState)})
+    attributes.update({0x8004: ("switch_mode", SwitchMode)})
+
+    def __init__(self, *args, **kwargs):
+        """Init."""
+        self.last_tsn = -1
+        super().__init__(*args, **kwargs)
+
+    server_commands = OnOff.server_commands.copy()
+    server_commands.update(
+        {
+            0xFC: foundation.ZCLCommandDef(
+                "rotate_type",
+                {"rotate_type": t.uint8_t},
+                False,
+                is_manufacturer_specific=True,
+            ),
+            0xFD: foundation.ZCLCommandDef(
+                "press_type",
+                {"press_type": t.uint8_t},
+                False,
+                is_manufacturer_specific=True,
+            ),
+        }
+    )
+
+    def handle_cluster_request(
+        self,
+        hdr: foundation.ZCLHeader,
+        args: List[Any],
+        *,
+        dst_addressing: Optional[
+            Union[t.Addressing.Group, t.Addressing.IEEE, t.Addressing.NWK]
+        ] = None,
+    ):
+        """Handle press_types command."""
+        # normally if default response sent, TS004x wouldn't send such repeated zclframe (with same sequence number),
+        # but for stability reasons (e. g. the case the response doesn't arrive the device), we can simply ignore it
+        if hdr.tsn == self.last_tsn:
+            _LOGGER.debug("TS004X: ignoring duplicate frame")
+            return
+        # save last sequence number
+        self.last_tsn = hdr.tsn
+
+        # send default response (as soon as possible), so avoid repeated zclframe from device
+        if not hdr.frame_control.disable_default_response:
+            self.debug("TS004X: send default response")
+            self.send_default_rsp(hdr, status=foundation.Status.SUCCESS)
+        # handle command
+        if hdr.command_id == 0xFC:
+            rotate_type = args[0]
+            self.listener_event(
+                ZHA_SEND_EVENT, self.rotate_type.get(rotate_type, "unknown"), []
+            )
+        elif hdr.command_id == 0xFD:
+            press_type = args[0]
+            self.listener_event(
+                ZHA_SEND_EVENT, self.press_type.get(press_type, "unknown"), []
+            )
 
 
 # Tuya Zigbee Metering Cluster Correction Implementation
@@ -994,7 +1086,7 @@ class TuyaWindowCoverControl(LocalDataCluster, WindowCovering):
             invert_attr = self._attr_cache.get(ATTR_COVER_INVERTED) == 1
             invert = (
                 not invert_attr
-                if self.endpoint.device.manufacturer in TUYA_COVER_INVERTED_BY_DEFAULT
+                if self.endpoint.device.tuya_cover_inverted_by_default
                 else invert_attr
             )
             value = value if invert else 100 - value
@@ -1007,7 +1099,7 @@ class TuyaWindowCoverControl(LocalDataCluster, WindowCovering):
 
     def command(
         self,
-        command_id: Union[foundation.Command, int, t.uint8_t],
+        command_id: Union[foundation.GeneralCommand, int, t.uint8_t],
         *args,
         manufacturer: Optional[Union[int, t.uint16_t]] = None,
         expect_reply: bool = True,
@@ -1037,7 +1129,7 @@ class TuyaWindowCoverControl(LocalDataCluster, WindowCovering):
             tuya_payload.data = [
                 1,
                 # need to implement direction change
-                TUYA_COVER_COMMAND[manufacturer][command_id],
+                self.endpoint.device.tuya_cover_command[command_id],
             ]  # remap the command to the Tuya command
         # Set Position Command
         elif command_id == WINDOW_COVER_COMMAND_LIFTPERCENT:
@@ -1049,7 +1141,7 @@ class TuyaWindowCoverControl(LocalDataCluster, WindowCovering):
             invert_attr = self._attr_cache.get(ATTR_COVER_INVERTED) == 1
             invert = (
                 not invert_attr
-                if self.endpoint.device.manufacturer in TUYA_COVER_INVERTED_BY_DEFAULT
+                if self.endpoint.device.tuya_cover_inverted_by_default
                 else invert_attr
             )
             position = args[0] if invert else 100 - args[0]
@@ -1092,7 +1184,15 @@ class TuyaWindowCoverControl(LocalDataCluster, WindowCovering):
 
 
 class TuyaWindowCover(CustomDevice):
-    """Tuya switch device."""
+    """Tuya Window cover device."""
+
+    # For most tuya devices 0 = Up/Open, 1 = Stop, 2 = Down/Close
+    tuya_cover_command = {0x0000: 0x0000, 0x0001: 0x0002, 0x0002: 0x0001}
+
+    # For all covers which need their position inverted by default
+    # Default (False) is 100 = open, 0 = closed; When True use 0 = open, 100 = closed instead
+    # Don't invert _TZE200_cowvfni3: https://github.com/Koenkk/zigbee2mqtt/issues/6043
+    tuya_cover_inverted_by_default = False
 
     def __init__(self, *args, **kwargs):
         """Init device."""
@@ -1160,11 +1260,11 @@ class TuyaLevelControl(CustomCluster, LevelControl):
             level,
             state,
         )
-        self._update_attribute(self.attridx["current_level"], level)
+        self._update_attribute(self.attributes_by_name["current_level"].id, level)
 
     def command(
         self,
-        command_id: Union[foundation.Command, int, t.uint8_t],
+        command_id: Union[foundation.GeneralCommand, int, t.uint8_t],
         *args,
         manufacturer: Optional[Union[int, t.uint16_t]] = None,
         expect_reply: bool = True,
@@ -1197,24 +1297,6 @@ class TuyaLevelControl(CustomCluster, LevelControl):
         return foundation.Status.UNSUP_CLUSTER_COMMAND
 
 
-class TuyaLocalCluster(LocalDataCluster):
-    """Tuya virtual clusters.
-
-    Prevents attribute reads and writes. Attribute writes could be converted
-    to DataPoint updates.
-    """
-
-    def update_attribute(self, attr_name: str, value: Any) -> None:
-        """Update attribute by attribute name."""
-
-        try:
-            attrid = self.attridx[attr_name]
-        except KeyError:
-            self.debug("no such attribute: %s", attr_name)
-            return
-        return self._update_attribute(attrid, value)
-
-
 @dataclasses.dataclass
 class DPToAttributeMapping:
     """Container for datapoint to cluster attribute update mapping."""
@@ -1245,17 +1327,37 @@ class TuyaNewManufCluster(CustomCluster):
     cluster_id: t.uint16_t = TUYA_CLUSTER_ID
     ep_attribute: str = "tuya_manufacturer"
 
-    manufacturer_server_commands = {
-        TUYA_SET_DATA: ("set_data", (TuyaCommand,), False),
-        TUYA_SEND_DATA: ("send_data", (TuyaCommand,), False),
-        TUYA_SET_TIME: ("set_time", (TuyaTimePayload,), False),
+    server_commands = {
+        TUYA_SET_DATA: foundation.ZCLCommandDef(
+            "set_data", {"data": TuyaCommand}, False, is_manufacturer_specific=True
+        ),
+        TUYA_SEND_DATA: foundation.ZCLCommandDef(
+            "send_data", {"data": TuyaCommand}, False, is_manufacturer_specific=True
+        ),
+        TUYA_SET_TIME: foundation.ZCLCommandDef(
+            "set_time", {"time": TuyaTimePayload}, False, is_manufacturer_specific=True
+        ),
     }
 
-    manufacturer_client_commands = {
-        TUYA_GET_DATA: ("get_data", (TuyaCommand,), True),
-        TUYA_SET_DATA_RESPONSE: ("set_data_response", (TuyaCommand,), True),
-        TUYA_ACTIVE_STATUS_RPT: ("active_status_report", (TuyaCommand,), True),
-        TUYA_SET_TIME: ("set_time_request", (t.data16,), True),
+    client_commands = {
+        TUYA_GET_DATA: foundation.ZCLCommandDef(
+            "get_data", {"data": TuyaCommand}, True, is_manufacturer_specific=True
+        ),
+        TUYA_SET_DATA_RESPONSE: foundation.ZCLCommandDef(
+            "set_data_response",
+            {"data": TuyaCommand},
+            True,
+            is_manufacturer_specific=True,
+        ),
+        TUYA_ACTIVE_STATUS_RPT: foundation.ZCLCommandDef(
+            "active_status_report",
+            {"data": TuyaCommand},
+            True,
+            is_manufacturer_specific=True,
+        ),
+        TUYA_SET_TIME: foundation.ZCLCommandDef(
+            "set_time_request", {"data": t.data16}, True, is_manufacturer_specific=True
+        ),
     }
 
     data_point_handlers: Dict[int, str] = {}
@@ -1272,12 +1374,11 @@ class TuyaNewManufCluster(CustomCluster):
         """Handle cluster specific request."""
 
         try:
-            if (
-                hdr.is_reply
-            ):  # server_cluster -> client_cluster cluster specific command
-                handler_name = f"handle_{self.client_commands[hdr.command_id][0]}"
+            if hdr.is_reply:
+                # server_cluster -> client_cluster cluster specific command
+                handler_name = f"handle_{self.client_commands[hdr.command_id].name}"
             else:
-                handler_name = f"handle_{self.server_commands[hdr.command_id][0]}"
+                handler_name = f"handle_{self.server_commands[hdr.command_id].name}"
         except KeyError:
             self.debug(
                 "Received unknown manufacturer command %s: %s", hdr.command_id, args
